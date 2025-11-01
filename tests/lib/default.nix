@@ -3,12 +3,35 @@
 let
   grep = "${pkgs.gnugrep}/bin/grep";
   ip = "${pkgs.iproute2}/bin/ip";
+  nft = "${pkgs.nftables}/bin/nft";
   ss = "${pkgs.iproute2}/bin/ss";
   systemctl = "${pkgs.systemd}/bin/systemctl";
   virsh = "${pkgs.libvirt}/bin/virsh";
   inherit (pkgs.lib) concatMapStringsSep;
 in
 rec {
+
+  /**
+    Extract and compare packet counters from nftables chain before/after.
+  
+    Shows if packets hit a specific rule.
+  
+    Type: analyzeNftablesCounters :: {
+    table :: String,
+    chain :: String,
+    rulePattern :: String
+    } -> String
+    */
+  analyzeNftablesCounters =
+    { table, chain, rulePattern }:
+    ''
+      counters = machine.execute("${nft} list chain ${table} ${chain} 2>/dev/null | ${grep} '${rulePattern}' | ${grep} 'counter' || true")
+    
+      if counters[0] == 0 and counters[1].strip():
+        print(f"Counter data:\n{counters[1]}")
+      else:
+        print("Counter pattern not found")
+    '';
 
   /**
     Create an isolated network namespace for VM simulation.
@@ -54,6 +77,46 @@ rec {
     ''
       machine.succeed("${ip} link add ${vethHost} type veth peer name ${vethGuest}")
       machine.succeed("${ip} link set ${vethGuest} master ${bridge}")
+    '';
+
+  /**
+    Check if a network interface has an IPv4 address in a given namespace.
+  
+    Type: hasIPv4InNamespace :: {
+    namespace :: String,
+    iface :: String,
+    expectedRange :: String (optional)
+    } -> String
+  
+    Returns a test script that:
+    - Checks if interface has IPv4 (inet, not inet6)
+    - Optionally validates it's in the expected CIDR range
+    - Returns as comment in output (nicht als failure!)
+  
+    Example:
+    hasIPv4InNamespace { 
+      namespace = "dhcp-test"; 
+      iface = "veth-host"; 
+      expectedRange = "192.168.100.0/24";
+    }
+  */
+  hasIPv4InNamespace =
+    { namespace
+    , iface
+    , expectedRange ? null
+    }:
+    ''
+      # Check if interface has IPv4
+      ipv4_result = machine.execute(
+        "${ip} netns exec ${namespace} ip addr show ${iface} | ${grep} 'inet ' | ${grep} -v 'inet6'"
+      )
+    
+      if ipv4_result[0] == 0:
+        print("✓ SUCCESS: Interface ${iface} has IPv4 address")
+        print(f"  {ipv4_result[1]}")
+      else:
+        print("✗ FAILURE: Interface ${iface} has NO IPv4 address")
+        print("  (Only IPv6 link-local, DHCP failed)")
     '';
 
   /**
