@@ -100,7 +100,8 @@ let
     nftables = makeTest { useNftables = true; };
     tor-routing-e2e = import ./tor-routing-e2e.nix { inherit lib module pkgs; };
     minimal-config = import ./minimal-config.nix { inherit module pkgs; };
-    dhcp-connectivity = import ./dhcp-connectivity.nix { inherit lib module pkgs; };
+    dhcp-connectivity-iptables = import ./dhcp-connectivity.nix { inherit lib module pkgs; useNftables = false; };
+    dhcp-connectivity-nftables = import ./dhcp-connectivity.nix { inherit lib module pkgs; useNftables = true; };
   };
 in
 tests
@@ -117,7 +118,8 @@ tests
         test -e ${tests.nftables}
         test -e ${tests.tor-routing-e2e}
         test -e ${tests.minimal-config}
-        test -e ${tests.dhcp-connectivity}
+        test -e ${tests.dhcp-connectivity-iptables}
+        test -e ${tests.dhcp-connectivity-nftables}
 
         echo "✓ All nixtornet tests passed"
         mkdir -p $out
@@ -126,6 +128,7 @@ tests
         ln -s ${tests.nftables} $out/nftables
         ln -s ${tests.tor-routing-e2e} $out/tor-routing-e2e
         ln -s ${tests.minimal-config} $out/minimal-config
-        ln -s ${tests.dhcp-connectivity} $out/dhcp-connectivity
+        ln -s ${tests.dhcp-connectivity-iptables} $out/dhcp-connectivity-iptables
+        ln -s ${tests.dhcp-connectivity-nftables} $out/dhcp-connectivity-nftables
       '';
 }
