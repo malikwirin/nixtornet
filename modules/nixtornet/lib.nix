@@ -160,7 +160,7 @@ with lib;
             '') torNetworks}
           }
 
-          chain forward {
+          chain LIBVIRT_FWO {
             type filter hook forward priority filter;
             
             ${concatMapStringsSep "\n" (net: ''
@@ -178,7 +178,7 @@ with lib;
       mkIsolationTable = isolatedNetworks: {
         family = "ip";
         content = ''
-          chain forward {
+          chain LIBVIRT_FWO {
             type filter hook forward priority filter + 10;
             
             ${concatMapStringsSep "\n" (
@@ -204,14 +204,14 @@ with lib;
       mkIPv6BlockTable = torNetworks: {
         family = "ip6";
         content = ''
-          chain forward {
+          chain LIBVIRT_FWO {
             type filter hook forward priority filter;
             ${concatMapStringsSep "\n" (net: ''
               iifname "${net.bridge.name}" counter drop
             '') torNetworks}
           }
 
-          chain output {
+          chain LIBVIRT_OUT {
             type filter hook output priority filter;
             ${concatMapStringsSep "\n" (net: ''
               oifname "${net.bridge.name}" counter drop

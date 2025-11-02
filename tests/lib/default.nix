@@ -81,42 +81,63 @@ rec {
 
   /**
     Check if a network interface has an IPv4 address in a given namespace.
-  
+    
+    Validates that the interface has a valid IPv4 address within the expected range.
+    If validation fails, the test stops with an error.
+
     Type: hasIPv4InNamespace :: {
     namespace :: String,
     iface :: String,
-    expectedRange :: String (optional)
+    expectedRange :: String (optional, default: "192.168.100")
     } -> String
-  
-    Returns a test script that:
-    - Checks if interface has IPv4 (inet, not inet6)
-    - Optionally validates it's in the expected CIDR range
-    - Returns as comment in output (nicht als failure!)
-  
+
+    Arguments:
+      - namespace: Network namespace name (e.g. "dhcp-test")
+      - iface: Interface name (e.g. "veth-host")
+      - expectedRange: IP range prefix to validate against (default: "192.168.100")
+                       e.g. "192.168.100" matches 192.168.100.0/24
+                       e.g. "10.0" matches 10.0.0.0/8
+
+    Returns:
+      Test script that:
+      - ✓ Prints success and continues if IPv4 found in expected range
+      - ✗ Fails the entire test if no IPv4 found
+      - ✗ Fails the entire test if IPv4 is outside expected range
+
     Example:
     hasIPv4InNamespace { 
       namespace = "dhcp-test"; 
-      iface = "veth-host"; 
-      expectedRange = "192.168.100.0/24";
+      iface = "veth-host";
     }
+    => Uses default range "192.168.100"
+
+    hasIPv4InNamespace { 
+      namespace = "dhcp-test"; 
+      iface = "veth-host"; 
+      expectedRange = "10.0.0";
+    }
+    => Validates IP is in 10.0.0.0/24 range
   */
   hasIPv4InNamespace =
     { namespace
     , iface
-    , expectedRange ? null
+    , expectedRange ? "192.168.100"
     }:
     ''
       # Check if interface has IPv4
       ipv4_result = machine.execute(
         "${ip} netns exec ${namespace} ip addr show ${iface} | ${grep} 'inet ' | ${grep} -v 'inet6'"
       )
-    
+
       if ipv4_result[0] == 0:
         print("✓ SUCCESS: Interface ${iface} has IPv4 address")
         print(f"  {ipv4_result[1]}")
+        # Verify IP is in expected range
+        machine.succeed("${ip} netns exec ${namespace} ip addr show ${iface} | ${grep} 'inet ${expectedRange}'")
       else:
         print("✗ FAILURE: Interface ${iface} has NO IPv4 address")
         print("  (Only IPv6 link-local, DHCP failed)")
+        machine.succeed("false")
     '';
 
   /**

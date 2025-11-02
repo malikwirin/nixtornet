@@ -202,8 +202,8 @@ pkgs.testers.runNixOSTest {
     print("-" * 60)
 
     # Dump the nixtornet-tor table for inspection
-    nixtornet-tor_table = host.succeed("${nft} list table ip nixtornet-tor")
-    print(f"\nComplete nixtornet-tor table:\n{nixtornet-tor_table}")
+    nixtornet_tor_table = host.succeed("${nft} list table ip nixtornet-tor")
+    print(f"\nComplete nixtornet-tor table:\n{nixtornet_tor_table}")
 
     # Check for existing DHCP exception rules
     dhcp_check_result = host.execute("${nft} list table ip nixtornet-tor | grep -E 'dport 67|dport 68|dhcp'")
