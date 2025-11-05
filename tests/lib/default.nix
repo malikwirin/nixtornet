@@ -4,7 +4,7 @@ let
   executables = import ./executables.nix { inherit pkgs; };
   firewallSpecifications = import ./firewall-specifications.nix { inherit pkgs; };
   shell-scripts = import ./shell-scripts.nix { inherit pkgs; };
-  inherit (executables) ip nft virsh systemctl ss grep concatMapStringsSep;
+  inherit (executables) concatMapStringsSep ip nft virsh systemctl ss grep udhcpc;
 in
 rec {
   /**
@@ -224,7 +224,7 @@ rec {
       print("-" * 60)
       
       # Attempt DHCP with timeout (may fail if UDP 67/68 is blocked by firewall)
-      machine.execute("${ip} netns exec ${namespace} timeout ${toString timeout} udhcpc -i ${iface} -n -q -T 5 -t 3 2>&1 | tee ${logFile} || true")
+      machine.execute("${ip} netns exec ${namespace} timeout ${toString timeout} ${udhcpc} -i ${iface} -n -q -T 5 -t 6 -A 3 2>&1 | tee ${logFile} || true")
       print("DHCP client attempt finished")
       
       # Brief pause to allow firewall counters to update
