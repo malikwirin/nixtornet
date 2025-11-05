@@ -7,8 +7,54 @@ let
   inherit (executables) ip nft virsh systemctl ss grep concatMapStringsSep;
 in
 rec {
-  # TODO: add Docstrings to function missing them
-
+  /**
+    Analyze firewall packet counters for a specific bridge after DHCP attempt.
+  
+    This function inspects the packet counters in firewall rules to see if packets
+    matching the bridge interface have been processed. It works differently for each backend:
+    - nftables: Filters the chain output for rules matching the bridge name and containing counters
+    - iptables: Uses inspectIptablesRules helper to show complete rule information
+  
+    Useful for debugging whether firewall rules are being hit and processing packets.
+  
+    Type: analyzeFirewallCounters :: {
+    useNftables :: Bool,
+    table :: String (nftables only),
+    chain :: String (nftables only),
+    bridgeName :: String
+    } -> String
+  
+    Arguments:
+    - useNftables: If true, uses nftables backend; if false, uses iptables
+    - table: nftables table name (e.g. "ip nixtornet-tor") - required for nftables
+    - chain: nftables chain name (e.g. "LIBVIRT_FWO") - required for nftables
+    - bridgeName: Bridge interface name (e.g. "virbr-tornet") - used by both backends
+  
+    Returns:
+    Python code that:
+    - For nftables: Lists the chain and greps for rules matching the bridge with counter data
+    - For iptables: Shows complete NAT and FORWARD chain inspection output
+    - Prints formatted counter data or "Counter pattern not found" if no matches
+  
+    Example (nftables):
+    analyzeFirewallCounters {
+      useNftables = true;
+      table = "ip nixtornet-tor";
+      chain = "LIBVIRT_FWO";
+      bridgeName = "virbr-tornet";
+    }
+  
+    Example (iptables):
+    analyzeFirewallCounters {
+      useNftables = false;
+      bridgeName = "virbr-tornet";
+    }
+  
+    Notes:
+    - The counter data shows which rules have been matched and how many packets/bytes processed
+    - Helpful for determining if firewall rules are being evaluated correctly
+    - Part of the DHCP testing workflow to verify packet flow through firewall
+  */
   analyzeFirewallCounters =
     { useNftables
     , table
@@ -31,51 +77,53 @@ rec {
       '';
 
   /**
-    Analyze and dump complete firewall state with DHCP rule diagnostics.
-    
-    This comprehensive function:
-    1. Dumps the complete firewall configuration (table/ruleset)
-    2. Checks for existing DHCP exception rules (UDP 67/68)
-    3. Inspects the specific forwarding chain where packets are processed
-    4. Provides clear diagnostics on whether DHCP rules exist
-    
+    Comprehensive firewall state analysis with DHCP diagnostics.
+  
+    This is a high-level composition function that combines three backend-agnostic
+    helper functions to provide complete firewall visibility:
+    1. Dumps the complete firewall configuration (via dumpFirewallRules)
+    2. Checks for DHCP exception rules (via checkDhcpRules)
+    3. Inspects the specific forwarding chain (via inspectChain)
+  
     Works with both nftables and iptables backends.
-    
+  
     Type: analyzeFirewallState :: {
-      useNftables :: Bool,
-      table :: String (nftables only, e.g. "ip nixtornet-tor"),
-      chain :: String (nftables only, e.g. "LIBVIRT_FWO"),
-      bridgeName :: String (iptables only, e.g. "virbr-tornet")
+    useNftables :: Bool,
+    table :: String (nftables only),
+    chain :: String (nftables only),
+    bridgeName :: String (iptables only)
     } -> String
-    
+  
     Arguments:
-      - useNftables: Whether to use nftables (true) or iptables (false)
-      - table: nftables table name (required for nftables)
-      - chain: nftables chain name (required for nftables)
-      - bridgeName: Bridge name for iptables inspection (required for iptables)
-    
+    - useNftables: Whether to use nftables (true) or iptables (false)
+    - table: nftables table name (required for nftables)
+    - chain: nftables chain name (required for nftables)
+    - bridgeName: Bridge name for iptables inspection (required for iptables)
+  
     Returns:
-      Python code that:
-      - Prints section header "FIREWALL ANALYSIS"
-      - Dumps complete firewall configuration
-      - Searches for DHCP exception rules (UDP 67/68)
-      - Shows diagnostics (✓ rules found or ✗ rules missing)
-      - Inspects specific forwarding chain
-      - Prints full firewall ruleset
-    
+    Python code that prints a formatted "FIREWALL ANALYSIS" section containing:
+    - Complete firewall configuration dump
+    - DHCP rule diagnostics (✓ found or ✗ missing)
+    - Forwarding chain inspection with rule counters
+  
     Example (nftables):
-      analyzeFirewallState {
-        useNftables = true;
-        table = "ip nixtornet-tor";
-        chain = "LIBVIRT_FWO";
-      }
-    
+    analyzeFirewallState {
+      useNftables = true;
+      table = "ip nixtornet-tor";
+      chain = "LIBVIRT_FWO";
+    }
+  
     Example (iptables):
-      analyzeFirewallState {
-        useNftables = false;
-        bridgeName = "virbr-tornet";
-      }
-      */
+    analyzeFirewallState {
+      useNftables = false;
+      bridgeName = "virbr-tornet";
+    }
+  
+    Notes:
+    - This is a composition function; actual logic resides in dumpFirewallRules, checkDhcpRules, and inspectChain
+    - Useful for full firewall inspection in test output
+    - Prints clear section headers to organize output
+  */
   analyzeFirewallState =
     { useNftables
     , table
