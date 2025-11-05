@@ -153,6 +153,13 @@ with lib;
       mkTorProxyTable = cfg: torTransPort: torDnsPort: torNetworks: {
         family = "ip";
         content = ''
+          ${optionalString cfg._internalDebugTrace ''
+            chain NIROTORNET_TRACE {
+              type filter hook forward priority -500;
+              meta nftrace set 1;
+            }
+          ''}
+
           chain prerouting {
             type nat hook prerouting priority dstnat;
             
@@ -173,8 +180,6 @@ with lib;
               iifname "${net.bridge.name}" ip daddr ${net.ip.address}/24 counter accept # TODO: Make CIDR configurable
               # Allow DHCP (necessary for guest VMs to obtain IP addresses)
               iifname "${net.bridge.name}" udp dport {67, 68} ip daddr ${net.ip.address} counter accept
-              # Block everything else
-              iifname "${net.bridge.name}" counter reject with icmp type host-prohibited
             '') torNetworks}
           }
         '';

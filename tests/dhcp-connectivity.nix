@@ -27,8 +27,11 @@ pkgs.testers.runNixOSTest {
 
       services.nixtornet = {
         enable = true;
-        tor.enable = true;
-        tor.networks = [ "tornet" ];
+        _internalDebugTrace = true;
+        tor = {
+          enable = true;
+          networks = [ "tornet" ];
+        };
 
         networks.tornet = {
           name = "tornet";
@@ -105,6 +108,28 @@ pkgs.testers.runNixOSTest {
       import time
 
       host.start()
+      run_nft_debug: bool = ${if useNftables then "True" else "False"}
+
+      if run_nft_debug:
+        # --- Part 1: Setup tracing before the DHCP attempt ---
+        # These commands are executed before the test tries to get a DHCP lease.
+
+        print("### Pre-DHCP Debug Setup (nftables) ###")
+
+        # Clear the kernel log buffer to get a clean slate.
+        machine.succeed("dmesg -C")
+
+        # Enable verbose kernel-level debug messages for the bridge module.
+        # This will show us exactly what the kernel does with packets on the bridge.
+        machine.succeed("echo 'module bridge +p' > /sys/kernel/debug/dynamic_debug/control")
+    
+        # Start the nftables trace monitor in the background.
+        # It will capture any packet that hits a 'meta nftrace set 1' rule.
+        machine.succeed("nohup nft monitor trace > /tmp/nft_trace.log 2>&1 & echo $! > /tmp/nft_monitor.pid")
+    
+        # Give the monitor a moment to start up.
+        machine.succeed("sleep 1")
+
       ${helpers.waitForServices [
         "multi-user.target"
         "libvirtd.service"
@@ -178,6 +203,26 @@ pkgs.testers.runNixOSTest {
         chain = "NIXTORNET_FWO";
       }}
 
+      if run_nft_debug:
+        # --- Part 2: Collect logs after the DHCP attempt ---
+        print("\n### Post-DHCP Log Collection (nftables) ###")
+
+        # The nft monitor has been running in the background. Now, we stop it
+        # to ensure all captured data is written to the log file.
+        # Stop the specific nft monitor process using its saved PID.
+        machine.succeed("kill $(cat /tmp/nft_monitor.pid)")
+
+        # Save the kernel log buffer to a file. This contains the bridge traces.
+        machine.succeed("journalctl --no-pager -k > /tmp/dmesg.log")
+
+        # Allow a brief moment for files to be written to disk.
+        time.sleep(1)
+
+        # Print the collected trace files for immediate inspection in the test output.
+        # The '|| true' ensures the test doesn't fail if a log file is empty.
+        machine.succeed("echo '\\n--- NFTABLES TRACE LOG ---'; cat /tmp/nft_trace.log || true")
+        machine.succeed("echo '\\n--- KERNEL DMESG LOG ---'; cat /tmp/dmesg.log || true")
+
       # === CHECK RESULTS ===
       print("\n" + "-" * 60)
       print("IPv4 Address Check")
@@ -221,18 +266,6 @@ pkgs.testers.runNixOSTest {
       print("  ✗ veth-host has only IPv6 link-local (fe80::...)")
       print("  ✗ Packet counters increase in REJECT rules")
       print("  ✗ nftables rejects UDP 67/68 packets")
-      print("")
-      print("Root cause:")
-      print("  The firewall's FORWARD chain rejects all traffic except:")
-      print("    - TCP to port 9040 (Tor TransPort)")
-      print("    - UDP to port 53 (Tor DNSPort)")
-      print("    - Established/related connections")
-      print("")
-      print("  DHCP-DISCOVER packets (UDP 67/68 broadcast from VM)")
-      print("  don't match any of these conditions")
-      print("  → Gets rejected by the final 'reject' rule")
-      print("")
-      print("  Fix: Add explicit DHCP exception rule before reject")
       print("")
       print("=" * 60)
 
