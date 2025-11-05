@@ -1,14 +1,10 @@
 { pkgs }:
 
 let
-  grep = "${pkgs.gnugrep}/bin/grep";
-  ip = "${pkgs.iproute2}/bin/ip";
-  iptables = "${pkgs.iptables}/bin/iptables";
-  nft = "${pkgs.nftables}/bin/nft";
-  ss = "${pkgs.iproute2}/bin/ss";
-  systemctl = "${pkgs.systemd}/bin/systemctl";
-  virsh = "${pkgs.libvirt}/bin/virsh";
-  inherit (pkgs.lib) concatMapStringsSep;
+  executables = import ./executables.nix { inherit pkgs; };
+  firewallSpecifications = import ./firewall-specifications.nix { inherit pkgs; };
+  shell-scripts = import ./shell-scripts.nix { inherit pkgs; };
+  inherit (executables) ip nft virsh systemctl ss grep concatMapStringsSep;
 in
 rec {
   # TODO: add Docstrings to function missing them
@@ -30,7 +26,7 @@ rec {
       ''
     else
       ''
-        firewall_output = machine.succeed("${inspectIptablesRules bridgeName}")
+        firewall_output = machine.succeed("${shell-scripts.inspectIptablesRules bridgeName}")
         print(f"Counter data (iptables):\n{firewall_output}")
       '';
 
@@ -232,31 +228,15 @@ rec {
     }:
     let
       # Backend-specific configuration
-      backend =
-        if useNftables then
-          {
-            name = "nftables";
-            command = "${nft} list table ${table}";
-            patterns = "dport 67|dport 68|dhcp";
-            successMsg = "DHCP exception rules found in nftables";
-            failureMsg = "NO DHCP exception rules found in nftables";
-          }
-        else
-          {
-            name = "iptables";
-            command = "${iptables} -L FORWARD -v -n";
-            patterns = "dpt:domain|dpt:bootpc|dpt:bootps";
-            successMsg = "DHCP exception rules found in iptables";
-            failureMsg = "NO DHCP exception rules found in iptables";
-          };
+      inherit (firewallSpecifications.dhcpCheck { inherit useNftables table; }) command patterns successMsg failureMsg;
     in
     ''
-      dhcp_check_result = machine.execute("${backend.command} 2>/dev/null | ${grep} -E '${backend.patterns}' || true")
+      dhcp_check_result = machine.execute("${command} 2>/dev/null | ${grep} -E '${patterns}' || true")
       if dhcp_check_result[0] == 0 and dhcp_check_result[1].strip():
-        print("\n✓ ${backend.successMsg}")
+        print("\n✓ ${successMsg}")
         print(f"  {dhcp_check_result[1]}")
       else:
-        print("\n✗ ${backend.failureMsg}")
+        print("\n✗ ${failureMsg}")
         print("  This explains why DHCP fails!")
     '';
 
@@ -306,27 +286,59 @@ rec {
       machine.succeed("${ip} link set ${vethGuest} master ${bridge}")
     '';
 
+  /**
+    Dump complete firewall configuration for debugging and inspection.
+  
+    This function displays the full firewall ruleset for either nftables or iptables,
+    with an optional custom heading. It's useful for understanding the effective
+    firewall state during tests.
+  
+    Type: dumpFirewallRules :: {
+    useNftables :: Bool,
+    ruleset :: String,
+    heading :: String (optional)
+    } -> String
+  
+    Arguments:
+    - useNftables: If true, dumps nftables table; if false, dumps iptables rules
+    - ruleset: For nftables: table name (e.g. "ip nixtornet-tor")
+              For iptables: bridge name (e.g. "virbr-tornet")
+    - heading: Custom heading for output. If not provided, backend-specific defaults are used
+              (defaults: "Complete nftables ruleset" or "Complete iptables ruleset")
+  
+    Returns:
+    Python code that executes the backend-specific command and prints the ruleset
+    with the appropriate heading.
+  
+    Example (nftables with default heading):
+    dumpFirewallRules { useNftables = true; ruleset = "ip nixtornet-tor"; }
+    => Prints "Complete nftables ruleset:" followed by nft output
+  
+    Example (iptables with custom heading):
+    dumpFirewallRules { 
+      useNftables = false; 
+      ruleset = "virbr-tornet"; 
+      heading = "Bridge firewall inspection"; 
+    }
+    => Prints "Bridge firewall inspection:" followed by iptables output
+  
+    Notes:
+    - Delegates backend configuration to firewallSpecifications.dumpRuleset
+    - The custom heading parameter overrides the backend-specific default
+    - Useful for debugging firewall state in test output
+  */
   dumpFirewallRules =
     { useNftables
     , ruleset
     , heading ? null
     }:
     let
-      backend =
-        if useNftables then
-          {
-            command = "${nft} list table ${ruleset}";
-            heading = if heading == null then "Complete nftables ruleset" else heading;
-          }
-        else
-          {
-            command = "${inspectIptablesRules ruleset}";
-            heading = if heading == null then "Complete iptables ruleset" else heading;
-          };
+      inherit (firewallSpecifications.dumpRuleset { inherit useNftables ruleset; }) command defaultHeading;
+      finalHeading = if heading != null then heading else defaultHeading;
     in
     ''
-      output = machine.succeed("${backend.command}")
-      print(f"\n${backend.heading}:\n{output}")
+      output = machine.succeed("${command}")
+      print(f"\n${finalHeading}:\n{output}")
     '';
 
   /**
@@ -375,57 +387,12 @@ rec {
     , heading ? null
     }:
     let
-      backend =
-        if useNftables then
-          {
-            command = "${nft} list chain ${table} ${target}";
-            defaultHeading = "Forward chain (where packets get processed)";
-          }
-        else
-          {
-            command = "${iptables} -L FORWARD -v -n 2>/dev/null | ${grep} -E 'Chain FORWARD|^.*${target}' || true";
-            defaultHeading = "FORWARD chain (where packets get processed)";
-          };
-      finalHeading = if heading != null then heading else backend.defaultHeading;
+      inherit (firewallSpecifications.inspectChain { inherit useNftables table target; }) command defaultHeading;
+      finalHeading = if heading != null then heading else defaultHeading;
     in
     ''
-      chain_output = machine.succeed("${backend.command}")
+      chain_output = machine.succeed("${command}")
       print(f"\n${finalHeading}:\n{chain_output}")
-    '';
-
-  /**
-    Shell script to inspect iptables rules for a specific network interface.
-  
-    This script queries both the NAT table (PREROUTING) and Filter table (FORWARD)
-    to provide a complete picture of firewall rules for the given bridge.
-  
-    Type: inspectIptablesRules :: String -> Derivation
-  
-    Arguments:
-    - bridgeName: Bridge interface name (e.g. "virbr-tornet")
-  
-    Returns:
-    A shell script that outputs formatted iptables rules.
-    Can be called from tests as: machine.succeed("${inspectIptablesRules}")
-  */
-  inspectIptablesRules =
-    bridgeName:
-    pkgs.writeShellScript "inspect-iptables-rules" ''
-      set -euo pipefail
-    
-      BRIDGE_NAME="${bridgeName}"
-    
-      echo "=== NAT Table (PREROUTING) ==="
-      ${iptables} -t nat -L PREROUTING -v -n 2>/dev/null | ${grep} "$BRIDGE_NAME" || echo "  (no rules found)"
-    
-      echo ""
-      echo "=== Filter Table (FORWARD) ==="
-      ${iptables} -L FORWARD -v -n 2>/dev/null | ${grep} "$BRIDGE_NAME" || echo "  (no rules found)"
-    
-      echo ""
-      echo "=== All Rules (complete output) ==="
-      ${iptables} -t nat -L -v -n 2>/dev/null | ${grep} -A 10 "Chain PREROUTING"
-      ${iptables} -L -v -n 2>/dev/null | ${grep} -A 15 "Chain FORWARD"
     '';
 
   /**
