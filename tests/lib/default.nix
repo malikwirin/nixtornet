@@ -27,7 +27,7 @@ rec {
     Arguments:
     - useNftables: If true, uses nftables backend; if false, uses iptables
     - table: nftables table name (e.g. "ip nixtornet-tor") - required for nftables
-    - chain: nftables chain name (e.g. "LIBVIRT_FWO") - required for nftables
+    - chain: nftables chain name (e.g. "NIXTORNET_FWO") - required for nftables
     - bridgeName: Bridge interface name (e.g. "virbr-tornet") - used by both backends
   
     Returns:
@@ -40,7 +40,7 @@ rec {
     analyzeFirewallCounters {
       useNftables = true;
       table = "ip nixtornet-tor";
-      chain = "LIBVIRT_FWO";
+      chain = "NIXTORNET_FWO";
       bridgeName = "virbr-tornet";
     }
   
@@ -110,7 +110,7 @@ rec {
     analyzeFirewallState {
       useNftables = true;
       table = "ip nixtornet-tor";
-      chain = "LIBVIRT_FWO";
+      chain = "NIXTORNET_FWO";
     }
   
     Example (iptables):
@@ -185,7 +185,7 @@ rec {
       - useNftables: Whether to use nftables (true) or iptables (false)
       - bridgeName: Bridge name for counter filtering (e.g. "virbr-tornet")
       - table: nftables table name (e.g. "ip nixtornet-tor")
-      - chain: nftables chain name (e.g. "LIBVIRT_FWO")
+      - chain: nftables chain name (e.g. "NIXTORNET_FWO")
       - timeout: DHCP client timeout in seconds (default: 10)
       - logFile: Path to store DHCP client output (default: "/tmp/dhcp-result.txt")
     
@@ -204,7 +204,7 @@ rec {
         useNftables = true;
         bridgeName = "virbr-tornet";
         table = "ip nixtornet-tor";
-        chain = "LIBVIRT_FWO";
+        chain = "NIXTORNET_FWO";
       }
   */
   attemptDhcpAndAnalyzeCounters =
@@ -405,7 +405,7 @@ rec {
     Arguments:
       - useNftables: Whether to use nftables (true) or iptables (false)
       - table: nftables table name (e.g. "ip nixtornet-tor") - required for nftables
-      - target: nftables chain name (e.g. "LIBVIRT_FWO") or iptables bridge (e.g. "virbr-tornet")
+      - target: nftables chain name (e.g. "NIXTORNET_FWO") or iptables bridge (e.g. "virbr-tornet")
       - heading: Custom heading for output (optional, backend-specific default)
     
     Returns:
@@ -417,7 +417,7 @@ rec {
       inspectChain {
         useNftables = true;
         table = "ip nixtornet-tor";
-        target = "LIBVIRT_FWO";
+        target = "NIXTORNET_FWO";
         heading = "nftables forwarding chain";
       }
     

@@ -167,7 +167,7 @@ pkgs.testers.runNixOSTest {
       print("-" * 60)
       ${helpers.analyzeFirewallCounters {
         table = "ip nixtornet-tor";
-        chain = "LIBVIRT_FWO";
+        chain = "NIXTORNET_FWO";
         inherit useNftables bridgeName;
       }}
 
@@ -175,7 +175,7 @@ pkgs.testers.runNixOSTest {
         iface = "veth-host";
         inherit useNftables bridgeName namespace;
         table = "ip nixtornet-tor";
-        chain = "LIBVIRT_FWO";
+        chain = "NIXTORNET_FWO";
       }}
 
       # === CHECK RESULTS ===
@@ -191,7 +191,7 @@ pkgs.testers.runNixOSTest {
       ${helpers.analyzeFirewallState {
         inherit useNftables bridgeName;
         table = "ip nixtornet-tor";
-        chain = "LIBVIRT_FWO";
+        chain = "NIXTORNET_FWO";
       }}
 
       # === DHCP LOGS ===

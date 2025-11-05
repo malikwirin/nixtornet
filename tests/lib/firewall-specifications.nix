@@ -133,7 +133,7 @@ in
     Arguments:
       - useNftables: If true, generates nftables configuration; if false, iptables
       - table: nftables table name (e.g. "ip nixtornet-tor"), used for nftables only
-      - target: For nftables: chain name (e.g. "LIBVIRT_FWO")
+      - target: For nftables: chain name (e.g. "NIXTORNET_FWO")
                For iptables: bridge name (e.g. "virbr-tornet") to filter output
     
     Returns:
@@ -142,8 +142,8 @@ in
       - defaultHeading: Human-readable heading for console output
     
     Example (nftables):
-      inspectChain { useNftables = true; table = "ip nixtornet-tor"; target = "LIBVIRT_FWO"; }
-      => { command = "nft list chain ip nixtornet-tor LIBVIRT_FWO"; 
+      inspectChain { useNftables = true; table = "ip nixtornet-tor"; target = "NIXTORNET_FWO"; }
+      => { command = "nft list chain ip nixtornet-tor NIXTORNET_FWO"; 
            defaultHeading = "Forward chain (where packets get processed)"; }
     
     Example (iptables):
