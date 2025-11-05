@@ -98,7 +98,7 @@ with lib;
       mkTorProxyRules =
         cfg: torTransPort: torDnsPort: networkCfg:
         let
-          gwAddr = networkCfg.ip.address;
+          gatewayAddress = networkCfg.ip.address;
           bridgeName = networkCfg.bridge.name;
         in
         optionalString (elem networkCfg.name cfg.tor.networks) ''
@@ -112,8 +112,11 @@ with lib;
           iptables -A FORWARD -i ${bridgeName} -m state --state ESTABLISHED,RELATED -j ACCEPT
 
           # Allow internal network traffic
-          iptables -A FORWARD -i ${bridgeName} -d ${gwAddr}/24 -j ACCEPT
+          iptables -A FORWARD -i ${bridgeName} -d ${gatewayAddress}/24 -j ACCEPT
 
+          # Allow DHCP (necessary for guest VMs to obtain IP addresses)
+          iptables -A FORWARD -i ${bridgeName} -p udp --dport 67:68 -d ${gatewayAddress} -j ACCEPT
+          
           # Block everything else from this network
           iptables -A FORWARD -i ${bridgeName} -j REJECT --reject-with icmp-host-prohibited
         '';
@@ -168,6 +171,8 @@ with lib;
               iifname "${net.bridge.name}" ct state established,related counter accept
               # Allow internal network traffic
               iifname "${net.bridge.name}" ip daddr ${net.ip.address}/24 counter accept # TODO: Make CIDR configurable
+              # Allow DHCP (necessary for guest VMs to obtain IP addresses)
+              iifname "${net.bridge.name}" udp dport {67, 68} ip daddr ${net.ip.address} counter accept
               # Block everything else
               iifname "${net.bridge.name}" counter reject with icmp type host-prohibited
             '') torNetworks}
