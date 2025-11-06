@@ -76,25 +76,27 @@ in
       }
     ];
 
-    # Enable IP forwarding
-    boot.kernel.sysctl = {
-      "net.ipv4.ip_forward" = 1;
-    }
-    // optionalAttrs cfg.tor.enable (
-      # deactivate ipv6 on tor networks
-      listToAttrs (
-        flatten (
-          map
-            (networkCfg: [
-              (nameValuePair "net.ipv6.conf.${networkCfg.bridge.name}.disable_ipv6" (
-                if elem networkCfg.name cfg.tor.networks then 1 else 0
-              ))
-              (nameValuePair "net.ipv6.conf.${networkCfg.bridge.name}.autoconf" 0)
-            ])
-            (attrValues cfg.networks)
+    boot = {
+      # Enable IP forwarding
+      kernel.sysctl = {
+        "net.ipv4.ip_forward" = 1;
+      }
+      // optionalAttrs cfg.tor.enable (
+        # deactivate ipv6 on tor networks
+        listToAttrs (
+          flatten (
+            map
+              (networkCfg: [
+                (nameValuePair "net.ipv6.conf.${networkCfg.bridge.name}.disable_ipv6" (
+                  if elem networkCfg.name cfg.tor.networks then 1 else 0
+                ))
+                (nameValuePair "net.ipv6.conf.${networkCfg.bridge.name}.autoconf" 0)
+              ])
+              (attrValues cfg.networks)
+          )
         )
-      )
-    );
+      );
+    };
 
     # Configure Tor if enabled
     services.tor = mkIf cfg.tor.enable {
@@ -160,52 +162,66 @@ in
         };
       };
 
-      firewall = mkIf (!useNftables) {
-        # Custom iptables rules
-        extraCommands = ''
-          # Tor transparent proxy rules
-          ${concatStringsSep "\n" (
-            mapAttrsToList (
-              name: networkCfg: backend.mkTorProxyRules cfg torTransPort torDnsPort networkCfg
-            ) cfg.networks
-          )}
+      firewall = lib.mkMerge [
+        (mkIf (!useNftables) {
+          # Custom iptables rules
+          extraCommands = ''
+            # Tor transparent proxy rules
+            ${concatStringsSep "\n" (
+              mapAttrsToList (
+                name: networkCfg: backend.mkTorProxyRules cfg torTransPort torDnsPort networkCfg
+              ) cfg.networks
+            )}
               
-          # Network isolation rules
-          ${concatStringsSep "\n" (
-            mapAttrsToList (name: networkCfg: backend.mkIsolationRules networkCfg) cfg.networks
-          )}
+            # Network isolation rules
+            ${concatStringsSep "\n" (
+              mapAttrsToList (name: networkCfg: backend.mkIsolationRules networkCfg) cfg.networks
+            )}
 
-          # IPv6 für Tor-Netzwerke blockieren
-          ${concatStringsSep "\n" (
-            map (
-              networkCfg:
-              optionalString (elem networkCfg.name cfg.tor.networks) (backend.mkIPv6BlockRules pkgs networkCfg)
-            ) (attrValues cfg.networks)
-          )}
-        '';
+            # IPv6 für Tor-Netzwerke blockieren
+            ${concatStringsSep "\n" (
+              map (
+                networkCfg:
+                optionalString (elem networkCfg.name cfg.tor.networks) (backend.mkIPv6BlockRules pkgs networkCfg)
+              ) (attrValues cfg.networks)
+            )}
+          '';
 
-        extraStopCommands = ''
-          # Cleanup Tor rules
-          ${concatStringsSep "\n" (
-            mapAttrsToList (
-              name: networkCfg: backend.mkTorCleanupRules torTransPort torDnsPort networkCfg
-            ) cfg.networks
-          )}
+          extraStopCommands = ''
+            # Cleanup Tor rules
+            ${concatStringsSep "\n" (
+              mapAttrsToList (
+                name: networkCfg: backend.mkTorCleanupRules torTransPort torDnsPort networkCfg
+              ) cfg.networks
+            )}
 
-          # Cleanup isolation rules
-          ${concatStringsSep "\n" (
-            mapAttrsToList (name: networkCfg: backend.mkIsolationCleanupRules networkCfg) cfg.networks
-          )}
+            # Cleanup isolation rules
+            ${concatStringsSep "\n" (
+              mapAttrsToList (name: networkCfg: backend.mkIsolationCleanupRules networkCfg) cfg.networks
+            )}
 
-          # Cleanup IPv6 rules
-          ${concatStringsSep "\n" (
-            map (
-              networkCfg:
-              optionalString (elem networkCfg.name cfg.tor.networks) (backend.mkIPv6BlockCleanupRules networkCfg)
-            ) (attrValues cfg.networks)
-          )}
-        '';
-      };
+            # Cleanup IPv6 rules
+            ${concatStringsSep "\n" (
+              map (
+                networkCfg:
+                optionalString (elem networkCfg.name cfg.tor.networks) (backend.mkIPv6BlockCleanupRules networkCfg)
+              ) (attrValues cfg.networks)
+            )}
+          '';
+        })
+        (lib.mkIf useNftables {
+          # TODO: use correct bridge names
+          # This allows incoming DHCP requests (DHCPREQUEST) to the dnsmasq server
+          extraInputRules = ''
+            iifname "virbr-*" udp dport 67 accept comment "DHCP server"
+          '';
+
+          # This allows the initial DHCP broadcast (DHCPDISCOVER) to be forwarded
+          extraForwardRules = ''
+            iifname "virbr-*" ip saddr 0.0.0.0 ip daddr 255.255.255.255 udp sport 68 udp dport 67 accept comment "DHCP discover"
+          '';
+        })
+      ];
     };
 
     systemd.services = {

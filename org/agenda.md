@@ -7,3 +7,5 @@ add docstring to all functions in `lib.nix`
 Write a Readme file for the `tests` directory that explains which functionality are validated by each test.
 ### Nested VMs
 Having a VM inside the test VM to test network isolation.
+### IPv6 isolation
+needs testing

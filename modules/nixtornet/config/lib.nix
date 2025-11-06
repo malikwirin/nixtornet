@@ -98,7 +98,7 @@ with lib;
       mkTorProxyRules =
         cfg: torTransPort: torDnsPort: networkCfg:
         let
-          gwAddr = networkCfg.ip.address;
+          gatewayAddress = networkCfg.ip.address;
           bridgeName = networkCfg.bridge.name;
         in
         optionalString (elem networkCfg.name cfg.tor.networks) ''
@@ -112,8 +112,11 @@ with lib;
           iptables -A FORWARD -i ${bridgeName} -m state --state ESTABLISHED,RELATED -j ACCEPT
 
           # Allow internal network traffic
-          iptables -A FORWARD -i ${bridgeName} -d ${gwAddr}/24 -j ACCEPT
+          iptables -A FORWARD -i ${bridgeName} -d ${gatewayAddress}/24 -j ACCEPT
 
+          # Allow DHCP (necessary for guest VMs to obtain IP addresses)
+          iptables -A FORWARD -i ${bridgeName} -p udp --dport 67:68 -d ${gatewayAddress} -j ACCEPT
+          
           # Block everything else from this network
           iptables -A FORWARD -i ${bridgeName} -j REJECT --reject-with icmp-host-prohibited
         '';
@@ -150,6 +153,13 @@ with lib;
       mkTorProxyTable = cfg: torTransPort: torDnsPort: torNetworks: {
         family = "ip";
         content = ''
+          ${optionalString cfg._internalDebugTrace ''
+            chain NIROTORNET_TRACE {
+              type filter hook forward priority -500;
+              meta nftrace set 1;
+            }
+          ''}
+
           chain prerouting {
             type nat hook prerouting priority dstnat;
             
@@ -160,16 +170,16 @@ with lib;
             '') torNetworks}
           }
 
-          chain forward {
-            type filter hook forward priority filter;
+          chain NIXTORNET_FWO {
+            type filter hook forward priority filter -1;
             
             ${concatMapStringsSep "\n" (net: ''
               # Allow established connections for ${net.name}
               iifname "${net.bridge.name}" ct state established,related counter accept
               # Allow internal network traffic
               iifname "${net.bridge.name}" ip daddr ${net.ip.address}/24 counter accept # TODO: Make CIDR configurable
-              # Block everything else
-              iifname "${net.bridge.name}" counter reject with icmp type host-prohibited
+              # Allow DHCP (necessary for guest VMs to obtain IP addresses)
+              iifname "${net.bridge.name}" udp dport {67, 68} ip daddr ${net.ip.address} counter accept
             '') torNetworks}
           }
         '';
@@ -178,7 +188,7 @@ with lib;
       mkIsolationTable = isolatedNetworks: {
         family = "ip";
         content = ''
-          chain forward {
+          chain NIXTORNET_ISOLATION {
             type filter hook forward priority filter + 10;
             
             ${concatMapStringsSep "\n" (
@@ -204,14 +214,14 @@ with lib;
       mkIPv6BlockTable = torNetworks: {
         family = "ip6";
         content = ''
-          chain forward {
+          chain NIXTORNET_FWO_IPv6 {
             type filter hook forward priority filter;
             ${concatMapStringsSep "\n" (net: ''
               iifname "${net.bridge.name}" counter drop
             '') torNetworks}
           }
 
-          chain output {
+          chain NIXTORNET_OUT_IPv6 {
             type filter hook output priority filter;
             ${concatMapStringsSep "\n" (net: ''
               oifname "${net.bridge.name}" counter drop

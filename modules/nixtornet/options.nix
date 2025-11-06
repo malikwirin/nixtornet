@@ -246,5 +246,11 @@ in
       };
       default = { };
     };
+
+    _internalDebugTrace = mkOption {
+      type = types.bool;
+      default = false;
+      description = "Internal option to enable verbose nftables tracing for tests.";
+    };
   };
 }
