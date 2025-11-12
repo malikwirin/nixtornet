@@ -102,6 +102,8 @@ let
     minimal-config = import ./minimal-config.nix { inherit module pkgs; };
     dhcp-connectivity-iptables = import ./dhcp-connectivity.nix { inherit lib module pkgs; useNftables = false; };
     dhcp-connectivity-nftables = import ./dhcp-connectivity.nix { inherit lib module pkgs; useNftables = true; };
+    dns-connectivity-iptables = import ./dns-connectivity.nix { inherit lib module pkgs; useNftables = false; };
+    dns-connectivity-nftables = import ./dns-connectivity.nix { inherit lib module pkgs; useNftables = true; };
   };
 in
 tests
@@ -120,6 +122,8 @@ tests
         test -e ${tests.minimal-config}
         test -e ${tests.dhcp-connectivity-iptables}
         test -e ${tests.dhcp-connectivity-nftables}
+        test -e ${tests.dns-connectivity-iptables}
+        test -e ${tests.dns-connectivity-nftables}
 
         echo "✓ All nixtornet tests passed"
         mkdir -p $out
@@ -130,5 +134,7 @@ tests
         ln -s ${tests.minimal-config} $out/minimal-config
         ln -s ${tests.dhcp-connectivity-iptables} $out/dhcp-connectivity-iptables
         ln -s ${tests.dhcp-connectivity-nftables} $out/dhcp-connectivity-nftables
+        ln -s ${tests.dns-connectivity-iptables} $out/dns-connectivity-iptables
+        ln -s ${tests.dns-connectivity-nftables} $out/dns-connectivity-nftables
       '';
 }

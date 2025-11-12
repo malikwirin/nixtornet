@@ -5,6 +5,7 @@
 }:
 
 let
+  common = import ./common.nix { inherit pkgs; };
   helpers = import ./lib/default.nix { inherit pkgs; };
 in
 pkgs.testers.runNixOSTest {
@@ -25,29 +26,8 @@ pkgs.testers.runNixOSTest {
         firewall.enable = true;
       };
 
-      services.nixtornet = {
-        enable = true;
+      services.nixtornet = common.configs.host.services.nixtornet // {
         _internalDebugTrace = true;
-        tor = {
-          enable = true;
-          networks = [ "tornet" ];
-        };
-
-        networks.tornet = {
-          name = "tornet";
-          uuid = "12345678-abcd-1234-abcd-123456789abc";
-
-          ip = {
-            address = "192.168.100.1";
-            netmask = "255.255.255.0";
-            dhcp = {
-              range = {
-                start = "192.168.100.10";
-                end = "192.168.100.100";
-              };
-            };
-          };
-        };
       };
 
       services.tor.enable = lib.mkForce false;
