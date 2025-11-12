@@ -1,8 +1,6 @@
-{ pkgs }:
+{ executables, pkgs, shell-scripts }:
 
 let
-  executables = import ./executables.nix { inherit pkgs; };
-  shell-scripts = import ./shell-scripts.nix { inherit pkgs; };
   inherit (executables) grep iptables nft;
   inherit (shell-scripts) inspectIptablesRules;
 in
