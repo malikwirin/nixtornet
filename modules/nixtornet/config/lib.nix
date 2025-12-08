@@ -1,7 +1,7 @@
 { lib }:
 
 with lib;
-{
+let
   extractPort =
     setting:
     if setting == null then
@@ -15,12 +15,24 @@ with lib;
     else
       null;
 
+in
+{
+  inherit extractPort;
   # Helper function to create a network definition from our config
-  mkNetworkDefinition = networkCfg: {
+  mkNetworkDefinition = { networkCfg, disableDns ? false, dnsForwarder ? null }: {
     inherit (networkCfg) name uuid forward;
     bridge = {
       inherit (networkCfg.bridge) name stp delay;
     };
+    dns =
+      if disableDns then {
+        enable = false;
+      } else
+        optionalAttrs (dnsForwarder != null) {
+          forwarder = [
+            { addr = dnsForwarder; }
+          ];
+        };
     ip = {
       inherit (networkCfg.ip) address netmask;
     }
@@ -107,6 +119,8 @@ with lib;
 
           # DNS redirection to Tor
           iptables -t nat -A PREROUTING -i ${bridgeName} -p udp --dport 53 -j REDIRECT --to-ports ${toString torDnsPort}
+          # Allow redirected DNS to reach Tor DNSPort (after DNAT, packet goes to INPUT chain)
+          iptables -A INPUT -i ${bridgeName} -p udp --dport ${toString torDnsPort} -j ACCEPT
 
           # Allow forwarding for established connections
           iptables -A FORWARD -i ${bridgeName} -m state --state ESTABLISHED,RELATED -j ACCEPT
@@ -122,6 +136,9 @@ with lib;
         '';
 
       # Generate cleanup rules for Tor
+      # These rules mirror mkTorProxyRules and must be kept in sync. TODO: make keeping in sync easier
+      # Each -D (delete) corresponds to an -A (append) in mkTorProxyRules. 
+      # The "2>/dev/null || true" ensures cleanup doesn't fail if rules don't exist.
       mkTorCleanupRules =
         torTransPort: torDnsPort: networkCfg:
         let
@@ -129,20 +146,39 @@ with lib;
           gwAddr = networkCfg.ip.address;
         in
         ''
+          # Remove NAT rules (PREROUTING chain)
+          # - TCP transparent proxy redirect to Tor TransPort
           iptables -t nat -D PREROUTING -i ${bridgeName} -p tcp --syn -j REDIRECT --to-ports ${toString torTransPort} 2>/dev/null || true
+          # - DNS redirect to Tor DNSPort
           iptables -t nat -D PREROUTING -i ${bridgeName} -p udp --dport 53 -j REDIRECT --to-ports ${toString torDnsPort} 2>/dev/null || true
+          
+          # Remove FORWARD chain rules
+          # - Established/related connections
           iptables -D FORWARD -i ${bridgeName} -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+          # - Internal network traffic to gateway
           iptables -D FORWARD -i ${bridgeName} -d ${gwAddr}/24 -j ACCEPT 2>/dev/null || true
+          # - Final reject rule (must be removed last among FORWARD rules)
           iptables -D FORWARD -i ${bridgeName} -j REJECT --reject-with icmp-host-prohibited 2>/dev/null || true
+
+          # Remove INPUT chain rules
+          # - DNS traffic to Tor DNSPort (added to allow traffic after DNAT redirect)
+          iptables -D INPUT -i ${bridgeName} -p udp --dport ${toString torDnsPort} -j ACCEPT 2>/dev/null || true
         '';
 
+      # Block all IPv6 traffic on Tor networks
+      # Tor does not support IPv6 transparent proxying, so we must block it
+      # to prevent leaks that could deanonymize users.
       mkIPv6BlockRules = pkgs: networkCfg: ''
+        # Only add rules if the bridge interface exists
         if ${pkgs.iproute2}/bin/ip link show ${networkCfg.bridge.name} >/dev/null 2>&1; then
+          # Block IPv6 forwarding through the bridge
           ip6tables -I FORWARD -i ${networkCfg.bridge.name} -j DROP 2>/dev/null || true
+          # Block IPv6 output to the bridge (prevents host from sending IPv6 to guests)
           ip6tables -I OUTPUT -o ${networkCfg.bridge.name} -j DROP 2>/dev/null || true
         fi
       '';
 
+      # Remove IPv6 blocking rules during cleanup
       mkIPv6BlockCleanupRules = networkCfg: ''
         ip6tables -D FORWARD -i ${networkCfg.bridge.name} -j DROP 2>/dev/null || true
         ip6tables -D OUTPUT -o ${networkCfg.bridge.name} -j DROP 2>/dev/null || true

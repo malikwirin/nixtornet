@@ -118,11 +118,10 @@ in
           port = 9040;
         };
 
-        # DNSPort für transparent DNS
-        DNSPort = mkDefault {
-          addr = "0.0.0.0";
-          port = 9053;
-        };
+        DNSPort = mkDefault (
+          [{ addr = "127.0.0.1"; port = 9053; }]
+          ++ map (net: { addr = net.ip.address; port = 9053; }) torNetworks
+        );
       };
     };
 
@@ -134,7 +133,10 @@ in
         networks = mapAttrsToList
           (name: networkCfg: {
             # Use NixVirt's writeXML function with the proper structure
-            definition = nixvirt-lib.network.writeXML (helpers.mkNetworkDefinition networkCfg);
+            definition = nixvirt-lib.network.writeXML (helpers.mkNetworkDefinition {
+              inherit networkCfg;
+              disableDns = elem name cfg.tor.networks;
+            });
             active = networkCfg.active;
           })
           cfg.networks;
@@ -211,9 +213,12 @@ in
         })
         (lib.mkIf useNftables {
           # TODO: use correct bridge names
-          # This allows incoming DHCP requests (DHCPREQUEST) to the dnsmasq server
+          # This allows incoming DHCP requests (DHCPREQUEST) to the dnsmasq server & DNS to Tor DNSPort
           extraInputRules = ''
             iifname "virbr-*" udp dport 67 accept comment "DHCP server"
+            ${optionalString (cfg.tor.enable && torDnsPort != null) ''
+              iifname "virbr-*" udp dport ${toString torDnsPort} accept comment "DNS to Tor DNSPort"
+            ''}
           '';
 
           # This allows the initial DHCP broadcast (DHCPDISCOVER) to be forwarded

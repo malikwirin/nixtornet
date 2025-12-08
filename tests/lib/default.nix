@@ -11,8 +11,8 @@ firewall // network-namespace // rec {
   /**
     Capture and analyze DNS packets on specified interfaces.
 
-    Starts tcpdump on bridge and loopback interfaces to track DNS packets,
-    performs an action, then stops captures and returns packet data.
+    Starts tcpdump on bridge interface to track DNS packets before and after
+    NAT redirect, performs an action, then stops captures and returns packet data.
 
     Type: captureDnsPackets :: {
     bridgeName :: String,
@@ -22,7 +22,7 @@ firewall // network-namespace // rec {
 
     Arguments:
     - bridgeName: Bridge interface to monitor
-    - dnsPort: DNS port on localhost to monitor (default: 9053)
+    - dnsPort: Tor DNS port to monitor (default: 9053)
     - action: Python code to execute while capturing
 
     Returns:
@@ -43,11 +43,14 @@ firewall // network-namespace // rec {
     }:
     ''
       print("Start tcpdump in background with explicit detach")
+      # Capture incoming DNS queries (port 53) on bridge
       machine.succeed(
         "(${tcpdump} -i ${bridgeName} -n udp port 53 -w /tmp/dns-bridge.pcap </dev/null >/dev/null 2>&1 &) && sleep 0.1"
       )
+      # Capture redirected DNS traffic (port ${toString dnsPort}) on bridge
+      # Tor listens on the bridge IP, so traffic arrives here after NAT redirect
       machine.succeed(
-        "(${tcpdump} -i lo -n udp port ${toString dnsPort} -w /tmp/dns-tor.pcap </dev/null >/dev/null 2>&1 &) && sleep 0.1"
+        "(${tcpdump} -i ${bridgeName} -n udp port ${toString dnsPort} -w /tmp/dns-tor.pcap </dev/null >/dev/null 2>&1 &) && sleep 0.1"
       )
       time.sleep(1)
 
@@ -268,6 +271,57 @@ firewall // network-namespace // rec {
     '';
 
   /**
+    Diagnose DNS failure based on packet capture results. 
+  
+    Type: diagnoseDnsFailure :: {
+    bridgePackets :: String,
+    torPackets :: String
+    } -> String
+  
+    Arguments:
+    - bridgePackets: Variable name containing bridge packet capture result
+    - torPackets: Variable name containing Tor DNS packet capture result
+  
+    Returns:
+    Python code that analyzes packet captures and fails with appropriate diagnosis.
+  */
+  diagnoseDnsFailure =
+    { bridgePackets ? "bridge_packets"
+    , torPackets ? "tor_packets"
+    }:
+    ''
+      has_bridge_packets = (
+        ${bridgePackets}[0] == 0 
+        and ${bridgePackets}[1].strip() 
+        and "No packets" not in ${bridgePackets}[1]
+      )
+      has_tor_packets = (
+        ${torPackets}[0] == 0 
+        and ${torPackets}[1].strip() 
+        and "No packets" not in ${torPackets}[1]
+      )
+
+      if has_bridge_packets and not has_tor_packets:
+        print("\n⚠️ DIAGNOSIS: NAT redirect not working")
+        print("  - Packets reach bridge ✔️")
+        print("  - Packets do NOT reach Tor DNS ❌")
+        print("  - Likely cause: Firewall blocks DNS before NAT redirect")
+        machine.succeed("false")
+      elif not has_bridge_packets:
+        print("\n⚠️ DIAGNOSIS: Packets not leaving namespace")
+        print("  - Check namespace routing and interface status")
+        machine.succeed("false")
+      elif has_tor_packets:
+        print("\n⚠️ DIAGNOSIS: Tor DNS receives query but response fails")
+        print("  - Check Tor DNS mock configuration")
+        machine.succeed("false")
+      else:
+        print("\n⚠️ DIAGNOSIS: Unknown failure")
+        print("  - No packets captured anywhere")
+        machine.succeed("false")
+    '';
+
+  /**
     Dump the XML configuration of a libvirt network and print it with a heading.
 
     Type: dumpNetXml :: String -> String -> String
@@ -341,6 +395,23 @@ firewall // network-namespace // rec {
       print("DNS Flow Test with Packet Capture")
       print("=" * 60)
 
+      # Debug: Show firewall rules and listening ports
+      print("\n--- DEBUG: Firewall and Network State ---")
+    
+      print("\n[iptables INPUT chain]")
+      print(machine.succeed("${iptables} -L INPUT -n -v --line-numbers"))
+    
+      print("\n[iptables NAT PREROUTING chain]")
+      print(machine.succeed("${iptables} -t nat -L PREROUTING -n -v --line-numbers"))
+    
+      print("\n[nftables ruleset]")
+      print(machine.execute("${nft} list ruleset")[1])
+    
+      print("\n[Listening on UDP ports]")
+      print(machine. succeed("${ss} -ulnp"))
+    
+      print("\n--- END DEBUG ---\n")
+
       print("Starting packet captures...")
       ${captureDnsPackets {
         inherit bridgeName dnsPort;
@@ -360,8 +431,8 @@ firewall // network-namespace // rec {
       print("\n--- Packet Analysis ---")
       print("\nPackets on bridge (${bridgeName}):")
       print(bridge_packets[1] if bridge_packets[1].strip() else "  No packets")
-    
-      print("\nPackets on localhost:${toString dnsPort} (Tor DNS):")
+  
+      print("\nPackets on ${bridgeName}:${toString dnsPort} (Tor DNS after redirect):")
       print(tor_packets[1] if tor_packets[1].strip() else "  No packets")
 
       # Evaluate DNS query result
@@ -374,37 +445,7 @@ firewall // network-namespace // rec {
         print("✗ DNS QUERY FAILED")
         print(f"  Exit code: {dns_result[0]}")
         print(f"  Output: {dns_result[1]}")
-
-        # Diagnose failure point
-        has_bridge_packets = (
-          bridge_packets[0] == 0 
-          and bridge_packets[1].strip() 
-          and "No packets" not in bridge_packets[1]
-        )
-        has_tor_packets = (
-          tor_packets[0] == 0 
-          and tor_packets[1].strip() 
-          and "No packets" not in tor_packets[1]
-        )
-
-        if has_bridge_packets and not has_tor_packets:
-          print("\n⚠️ DIAGNOSIS: NAT redirect not working")
-          print("  - Packets reach bridge ✔️")
-          print("  - Packets do NOT reach Tor DNS ❌")
-          print("  - Likely cause: Firewall blocks DNS before NAT redirect")
-          machine.succeed("false")
-        elif not has_bridge_packets:
-          print("\n⚠️ DIAGNOSIS: Packets not leaving namespace")
-          print("  - Check namespace routing and interface status")
-          machine.succeed("false")
-        elif has_tor_packets:
-          print("\n⚠️ DIAGNOSIS: Tor DNS receives query but response fails")
-          print("  - Check Tor DNS mock configuration")
-          machine.succeed("false")
-        else:
-          print("\n⚠️ DIAGNOSIS: Unknown failure")
-          print("  - No packets captured anywhere")
-          machine.succeed("false")
+        ${diagnoseDnsFailure {}}
     '';
 
   /**

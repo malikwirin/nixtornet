@@ -34,6 +34,9 @@ pkgs.testers.runNixOSTest {
         tor.enable = lib.mkForce false;
       };
 
+      # TODO: mock-tor dnsmasq must also listen on bridge IP (192.168.100.1:9053)
+      # Currently only listens on 127.0.0.1:9053, but NAT redirect sends
+      # packets to the bridge IP. See DNSPort config in modules/nixtornet/config/default.nix
       systemd.services.mock-tor = {
         description = "Mock DNS server on Tor DNSPort";
         wantedBy = [ "multi-user.target" ];
