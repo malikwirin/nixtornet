@@ -2,6 +2,17 @@
 let
   inherit (executables) concatMapStringsSep grep ip udhcpc;
   inherit (firewall) analyzeFirewallCounters;
+
+  # constants
+  defaultGateway = "192.168.100.1";
+  defaultIpRange = "192.168.100";
+
+  inNamespace = namespace: cmd: "${ip} netns exec ${namespace} ${cmd}";
+
+  nsExecute = { namespace, cmd, success ? false }:
+    ''machine.${(if success then "succeed" else "execute")}("${inNamespace namespace cmd}")'';
+
+  nsSucceed = namespace: cmd: nsExecute { inherit namespace cmd; success = true; };
 in
 rec {
   /**
@@ -71,7 +82,11 @@ rec {
       print("-" * 60)
 
       # Attempt DHCP with timeout (may fail if UDP 67/68 is blocked by firewall)
-      machine.execute("${ip} netns exec ${namespace} timeout ${toString timeout} ${udhcpc} -i ${iface} -n -q -T 5 -t 6 -A 3 2>&1 | tee ${logFile} || true")
+
+      ${nsExecute {
+        inherit namespace;
+        cmd = "timeout ${toString timeout} ${udhcpc} -i ${iface} -n -q -T 5 -t 6 -A 3 2>&1 | tee ${logFile} || true";
+      }}
       print("DHCP client attempt finished")
 
       # Brief pause to allow firewall counters to update
@@ -108,8 +123,8 @@ rec {
     }:
     ''
       machine.succeed("${ip} link set ${hostIface} up")
-      machine.succeed("${ip} netns exec ${namespace} ${ip} link set ${guestIface} up")
-      machine.succeed("${ip} netns exec ${namespace} ${ip} link set lo up")
+      ${ nsSucceed namespace "${ip} link set ${guestIface} up" }
+      ${ nsSucceed namespace "${ip} link set lo up" }
     '';
 
   /**
@@ -132,7 +147,7 @@ rec {
       => Creates /etc/netns/testns/resolv.conf with nameserver entry
   */
   configureNamespaceDns =
-    { namespace, dnsServers ? [ "192.168.100.1" ] }:
+    { namespace, dnsServers ? [ defaultGateway ] }:
     ''
       machine.succeed("mkdir -p /etc/netns/${namespace}")
       machine.succeed(
@@ -171,12 +186,12 @@ rec {
     { namespace
     , iface
     , ipAddr
-    , gateway ? "192.168.100.1"
+    , gateway ? defaultGateway
     ,
     }:
     ''
-      machine.succeed("${ip} netns exec ${namespace} ${ip} addr add ${ipAddr} dev ${iface}")
-      machine.succeed("${ip} netns exec ${namespace} ${ip} route add default via ${gateway}")
+      ${nsSucceed namespace "${ip} addr add ${ipAddr} dev ${iface}"}
+      ${nsSucceed namespace "${ip} route add default via ${gateway}"}
     '';
 
   /**
@@ -267,19 +282,17 @@ rec {
   hasIPv4InNamespace =
     { namespace
     , iface
-    , expectedRange ? "192.168.100"
+    , expectedRange ? defaultIpRange
     }:
     ''
       # Check if interface has IPv4
-      ipv4_result = machine.execute(
-        "${ip} netns exec ${namespace} ip addr show ${iface} | ${grep} 'inet ' | ${grep} -v 'inet6'"
-      )
+      ipv4_result = ${ nsExecute { inherit namespace; cmd = "${ip} addr show ${iface} | ${grep} 'inet ' | ${grep} -v 'inet6'"; } }
 
       if ipv4_result[0] == 0:
         print("✓ SUCCESS: Interface ${iface} has IPv4 address")
         print(f"  {ipv4_result[1]}")
         # Verify IP is in expected range
-        machine.succeed("${ip} netns exec ${namespace} ip addr show ${iface} | ${grep} 'inet ${expectedRange}'")
+        ${nsSucceed namespace "${ip} addr show ${iface} | ${grep} 'inet ${expectedRange}'"}
       else:
         print("✗ FAILURE: Interface ${iface} has NO IPv4 address")
         print("  (Only IPv6 link-local, DHCP failed)")
@@ -348,7 +361,7 @@ rec {
     , vethHost
     , vethGuest
     , namespaceIp
-    , gatewayIp ? "192.168.100.1"
+    , gatewayIp ? defaultGateway
     , dns ? true
     ,
     }:
