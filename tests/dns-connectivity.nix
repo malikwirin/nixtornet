@@ -9,7 +9,7 @@ let
   executables = import ./lib/executables.nix { inherit pkgs; };
   helpers = import ./lib/default.nix { inherit pkgs; };
   shell-scripts = import ./lib/shell-scripts.nix { inherit pkgs; };
-  inherit (executables) dnsmasq ip killall ping udhcpc;
+  inherit (executables) ip ping udhcpc;
   gatewayIp = "192.168.100.1";
 in
 pkgs.testers.runNixOSTest {
@@ -142,7 +142,7 @@ pkgs.testers.runNixOSTest {
 
       # Phase 3: DNS flow test with packet capture
       ${helpers.testDnsFlowWithCapture {
-        inherit namespace bridgeName;
+        inherit namespace bridgeName useNftables;
       }}
 
       # Phase 4: Check Tor DNS server logs

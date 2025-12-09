@@ -5,7 +5,7 @@ let
   shell-scripts = import ./shell-scripts.nix { inherit pkgs; };
   firewall = import ./firewall { inherit executables pkgs shell-scripts; };
   network-namespace = import ./network-namespace.nix { inherit executables firewall pkgs; };
-  inherit (executables) dig iptables nft virsh systemctl pkill ss grep tcpdump;
+  inherit (executables) dig iptables journalctl nft virsh systemctl pkill ss grep tcpdump;
 in
 firewall // network-namespace // rec {
   /**
@@ -62,36 +62,28 @@ firewall // network-namespace // rec {
       # Stop captures
       machine.execute("${pkill} tcpdump || true")
       time.sleep(1)
-
-      # Read captures
-      bridge_packets = machine.execute(
-        "${tcpdump} -r /tmp/dns-bridge.pcap -n 2>/dev/null || echo 'No packets captured'"
-      )
-      tor_packets = machine.execute(
-        "${tcpdump} -r /tmp/dns-tor.pcap -n 2>/dev/null || echo 'No packets captured'"
-      )
     '';
 
   /**
     Check Tor DNS mock server logs for received queries.
   
     Type: checkTorDnsLogs :: {
-    logFile :: String,
+    serviceName :: String,
     expectedQuery :: String
     } -> String
   
     Arguments:
-    - logFile: Path to DNS server log
+    - serviceName: name of the Tor DNS mock service
     - expectedQuery: Query that should appear in logs
   
     Example:
     checkTorDnsLogs {
-      logFile = "/var/log/mock-tor-dns.log";
+      serviceName = "mock-tor.service";
       expectedQuery = "google.com";
     }
   */
   checkTorDnsLogs =
-    { logFile ? "/var/log/mock-tor-dns.log"
+    { serviceName ? "mock-tor.service"
     , expectedQuery ? "google.com"
     }:
     ''
@@ -99,8 +91,8 @@ firewall // network-namespace // rec {
       print("Tor DNS Server Logs")
       print("=" * 60)
     
-      log_result = machine.execute("cat ${logFile} 2>/dev/null || echo 'No log file'")
-    
+      log_result = machine.execute("${journalctl} -u ${serviceName} --no-pager | ${grep} '${expectedQuery}' || echo 'No queries found'")
+
       if log_result[0] == 0 and log_result[1].strip():
         print("DNS Server Log:")
         print(log_result[1])
@@ -271,57 +263,6 @@ firewall // network-namespace // rec {
     '';
 
   /**
-    Diagnose DNS failure based on packet capture results. 
-  
-    Type: diagnoseDnsFailure :: {
-    bridgePackets :: String,
-    torPackets :: String
-    } -> String
-  
-    Arguments:
-    - bridgePackets: Variable name containing bridge packet capture result
-    - torPackets: Variable name containing Tor DNS packet capture result
-  
-    Returns:
-    Python code that analyzes packet captures and fails with appropriate diagnosis.
-  */
-  diagnoseDnsFailure =
-    { bridgePackets ? "bridge_packets"
-    , torPackets ? "tor_packets"
-    }:
-    ''
-      has_bridge_packets = (
-        ${bridgePackets}[0] == 0 
-        and ${bridgePackets}[1].strip() 
-        and "No packets" not in ${bridgePackets}[1]
-      )
-      has_tor_packets = (
-        ${torPackets}[0] == 0 
-        and ${torPackets}[1].strip() 
-        and "No packets" not in ${torPackets}[1]
-      )
-
-      if has_bridge_packets and not has_tor_packets:
-        print("\n⚠️ DIAGNOSIS: NAT redirect not working")
-        print("  - Packets reach bridge ✔️")
-        print("  - Packets do NOT reach Tor DNS ❌")
-        print("  - Likely cause: Firewall blocks DNS before NAT redirect")
-        machine.succeed("false")
-      elif not has_bridge_packets:
-        print("\n⚠️ DIAGNOSIS: Packets not leaving namespace")
-        print("  - Check namespace routing and interface status")
-        machine.succeed("false")
-      elif has_tor_packets:
-        print("\n⚠️ DIAGNOSIS: Tor DNS receives query but response fails")
-        print("  - Check Tor DNS mock configuration")
-        machine.succeed("false")
-      else:
-        print("\n⚠️ DIAGNOSIS: Unknown failure")
-        print("  - No packets captured anywhere")
-        machine.succeed("false")
-    '';
-
-  /**
     Dump the XML configuration of a libvirt network and print it with a heading.
 
     Type: dumpNetXml :: String -> String -> String
@@ -345,6 +286,60 @@ firewall // network-namespace // rec {
   '';
 
   /**
+    Evaluate DNS query result and diagnose failures.
+    
+    Expects the following variables to be in scope:
+    - dns_result: Tuple of (exit_code, output) from DNS query
+    - has_bridge_packets: Boolean indicating if packets reached the bridge
+    - has_tor_packets: Boolean indicating if packets reached Tor DNS
+    
+    Type: evaluateDnsQueryResult :: {
+      mockAnswer :: String,
+      query :: String
+    } -> String
+    
+    Arguments:
+    - mockAnswer: Expected DNS answer for validation
+    - query: Domain name that was queried
+    
+    Returns:
+    Python code that evaluates the DNS query result and diagnoses failures.
+  */
+  evaluateDnsQueryResult = { mockAnswer, query }:
+    ''
+      # Evaluate DNS query result
+      print("\n--- DNS Query Result ---")
+      if dns_result[0] == 0 and "${mockAnswer}" in dns_result[1]:
+        print("✓ DNS QUERY SUCCESS")
+        print("  Query: ${query}")
+        print(f"  Answer: {dns_result[1].strip()}")
+      else:
+        print("✗ DNS QUERY FAILED")
+        print(f"  Exit code: {dns_result[0]}")
+        print(f"  Output: {dns_result[1]}")
+        
+        # Diagnose the failure
+        if has_bridge_packets and not has_tor_packets:
+          print("\n⚠️ DIAGNOSIS: NAT redirect not working")
+          print("  - Packets reach bridge ✔️")
+          print("  - Packets do NOT reach Tor DNS ❌")
+          print("  - Likely cause: Firewall blocks DNS before NAT redirect")
+          machine.succeed("false")
+        elif not has_bridge_packets:
+          print("\n⚠️ DIAGNOSIS: Packets not leaving namespace")
+          print("  - Check namespace routing and interface status")
+          machine.succeed("false")
+        elif has_tor_packets:
+          print("\n⚠️ DIAGNOSIS: Tor DNS receives query but response fails")
+          print("  - Check Tor DNS mock configuration")
+          machine.succeed("false")
+        else:
+          print("\n⚠️ DIAGNOSIS: Unknown failure")
+          print("  - No packets captured anywhere")
+          machine.succeed("false")
+    '';
+
+  /**
     Test DNS flow from guest namespace through Tor with diagnostic output.
 
     Performs end-to-end DNS query test with packet capture to diagnose
@@ -358,6 +353,7 @@ firewall // network-namespace // rec {
     mockAnswer :: String,
     query :: String,
     timeout :: Int
+    useNftables :: Bool
     } -> String
 
     Arguments:
@@ -368,6 +364,7 @@ firewall // network-namespace // rec {
     - mockAnswer: Expected DNS answer for validation (default: "1.1.1.1")
     - query: Domain name to query (default: "google.com")
     - timeout: DNS query timeout in seconds (default: "10")
+    - useNftables: Whether to use nftables or iptables as firewall backend
 
     Returns:
     Python test code that:
@@ -389,6 +386,7 @@ firewall // network-namespace // rec {
     , mockAnswer ? "1.1.1.1"
     , query ? "google.com"
     , timeout ? "10"
+    , useNftables
     }:
     ''
       print("\n" + "=" * 60)
@@ -396,21 +394,14 @@ firewall // network-namespace // rec {
       print("=" * 60)
 
       # Debug: Show firewall rules and listening ports
-      print("\n--- DEBUG: Firewall and Network State ---")
-    
-      print("\n[iptables INPUT chain]")
-      print(machine.succeed("${iptables} -L INPUT -n -v --line-numbers"))
-    
-      print("\n[iptables NAT PREROUTING chain]")
-      print(machine.succeed("${iptables} -t nat -L PREROUTING -n -v --line-numbers"))
-    
-      print("\n[nftables ruleset]")
-      print(machine.execute("${nft} list ruleset")[1])
-    
+      ${firewall.dumpFirewallRules {
+        inherit useNftables;
+        ruleset = if useNftables then "ip nixtornet-tor" else bridgeName;
+        heading = "Firewall and Network State";
+      }}
+
       print("\n[Listening on UDP ports]")
-      print(machine. succeed("${ss} -ulnp"))
-    
-      print("\n--- END DEBUG ---\n")
+      print(machine.succeed("${ss} -ulnp"))
 
       print("Starting packet captures...")
       ${captureDnsPackets {
@@ -427,6 +418,25 @@ firewall // network-namespace // rec {
         '';
       }}
 
+      # Read captures
+      bridge_packets = machine.execute(
+        "${tcpdump} -r /tmp/dns-bridge.pcap -n 2>/dev/null || echo 'No packets captured'"
+      )
+      tor_packets = machine.execute(
+        "${tcpdump} -r /tmp/dns-tor.pcap -n 2>/dev/null || echo 'No packets captured'"
+      )
+
+      has_bridge_packets = (
+        bridge_packets[0] == 0 
+        and bridge_packets[1].strip() 
+        and "No packets" not in bridge_packets[1]
+      )
+      has_tor_packets = (
+        tor_packets[0] == 0 
+        and tor_packets[1].strip() 
+        and "No packets" not in tor_packets[1]
+      )
+
       # Display captured packets
       print("\n--- Packet Analysis ---")
       print("\nPackets on bridge (${bridgeName}):")
@@ -435,17 +445,7 @@ firewall // network-namespace // rec {
       print("\nPackets on ${bridgeName}:${toString dnsPort} (Tor DNS after redirect):")
       print(tor_packets[1] if tor_packets[1].strip() else "  No packets")
 
-      # Evaluate DNS query result
-      print("\n--- DNS Query Result ---")
-      if dns_result[0] == 0 and "${mockAnswer}" in dns_result[1]:
-        print("✓ DNS QUERY SUCCESS")
-        print("  Query: ${query}")
-        print(f"  Answer: {dns_result[1].strip()}")
-      else:
-        print("✗ DNS QUERY FAILED")
-        print(f"  Exit code: {dns_result[0]}")
-        print(f"  Output: {dns_result[1]}")
-        ${diagnoseDnsFailure {}}
+      ${evaluateDnsQueryResult { inherit mockAnswer query; }}
     '';
 
   /**

@@ -6,6 +6,7 @@
   grep = "${pkgs.gnugrep}/bin/grep";
   ip = "${pkgs.iproute2}/bin/ip";
   iptables = "${pkgs.iptables}/bin/iptables";
+  journalctl = "${pkgs.systemd}/bin/journalctl";
   killall = "${pkgs.killall}/bin/killall";
   nft = "${pkgs.nftables}/bin/nft";
   ping = "${pkgs.iputils}/bin/ping";
