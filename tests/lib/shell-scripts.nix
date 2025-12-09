@@ -78,30 +78,23 @@ in
     1. socat on TCP port 9040 (TransPort) - accepts and discards connections
     2. dnsmasq on UDP port 9053 (DNSPort) - responds to all DNS queries with 1.1.1.1
 
-    The DNSPort listens on both localhost and the provided gateway address to
-    receive packets after NAT PREROUTING redirect.
-
     Used in tests to simulate Tor without running the actual Tor daemon. 
 
-    Type: start-mock-tor ::  String -> Derivation
-
-    Arguments:
-    - gatewayAddress: The bridge gateway IP address to listen on (e.g.  "192.168.100.1")
+    Type: start-mock-tor :: Derivation
 
     Returns:
     A shell script that can be used as systemd ExecStart. 
 
     Example:
-    systemd.services.mock-tor. serviceConfig.ExecStart = shell-scripts. start-mock-tor "192.168.100.1";
+    systemd.services.mock-tor.serviceConfig.ExecStart = shell-scripts.start-mock-tor;
   */
-  start-mock-tor = gatewayAddress: pkgs.writeShellScript "start-mock-tor" ''
+  start-mock-tor = pkgs.writeShellScript "start-mock-tor" ''
     ${socat} TCP-LISTEN:9040,bind=127.0.0.1,fork,reuseaddr /dev/null &
     
     # Mock DNSPort (actual DNS responder for test)
     exec ${dnsmasq} \
       --port=9053 \
       --listen-address=127.0.0.1 \
-      --listen-address=${gatewayAddress} \
       --address=/#/1.1.1.1 \
       --cache-size=0 \
       --no-hosts \

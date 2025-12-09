@@ -106,7 +106,42 @@ in
           iptables -D FORWARD -i ${bridgeName} -d ${ipAddress}/${cidrBits} -j ACCEPT 2>/dev/null || true
         '';
 
-      # Generate iptables rules for Tor transparent proxy
+      /**
+        Generate iptables rules for Tor transparent proxy.
+
+        Creates NAT and filter rules to redirect guest traffic through Tor.
+  
+        ## Key Design Decision: DNAT to localhost for DNS
+  
+        - DNS traffic uses DNAT (not REDIRECT) to explicitly target 127.0.0.1
+        - This avoids circular dependency: Tor doesn't need bridge IPs to exist
+        - Tor only binds to localhost, which is always available at boot
+        - More secure: Tor isn't exposed on bridge interface
+        - TCP uses REDIRECT as it doesn't have the same binding requirements
+  
+        # Type
+  
+        ```
+        mkTorProxyRules :: Config -> Int -> Int -> NetworkConfig -> String
+        ```
+  
+        # Arguments
+  
+        - [cfg] Full nixtornet configuration
+        - [torTransPort] Tor transparent proxy port (default: 9040)
+        - [torDnsPort] Tor DNS port (default: 9053)
+        - [networkCfg] Configuration for this specific network
+  
+        # Returns
+  
+        Shell script commands to configure iptables rules.
+  
+        # Example
+  
+        ```nix
+        mkTorProxyRules cfg 9040 9053 myNetworkConfig
+        ```
+      */
       mkTorProxyRules =
         cfg: torTransPort: torDnsPort: networkCfg:
         let
@@ -118,7 +153,7 @@ in
           iptables -t nat -A PREROUTING -i ${bridgeName} -p tcp --syn -j REDIRECT --to-ports ${toString torTransPort}
 
           # DNS redirection to Tor
-          iptables -t nat -A PREROUTING -i ${bridgeName} -p udp --dport 53 -j REDIRECT --to-ports ${toString torDnsPort}
+          iptables -t nat -A PREROUTING -i ${bridgeName} -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:${toString torDnsPort}
           # Allow redirected DNS to reach Tor DNSPort (after DNAT, packet goes to INPUT chain)
           iptables -A INPUT -i ${bridgeName} -p udp --dport ${toString torDnsPort} -j ACCEPT
 
@@ -150,7 +185,7 @@ in
           # - TCP transparent proxy redirect to Tor TransPort
           iptables -t nat -D PREROUTING -i ${bridgeName} -p tcp --syn -j REDIRECT --to-ports ${toString torTransPort} 2>/dev/null || true
           # - DNS redirect to Tor DNSPort
-          iptables -t nat -D PREROUTING -i ${bridgeName} -p udp --dport 53 -j REDIRECT --to-ports ${toString torDnsPort} 2>/dev/null || true
+          iptables -t nat -D PREROUTING -i ${bridgeName} -p udp --dport 53 -j DNAT --to-destination 127.0.0.1:${toString torDnsPort} 2>/dev/null || true
           
           # Remove FORWARD chain rules
           # - Established/related connections
@@ -202,7 +237,9 @@ in
             ${concatMapStringsSep "\n" (net: ''
               # Tor transparent proxy for ${net.name}
               iifname "${net.bridge.name}" tcp flags syn counter redirect to :${toString torTransPort}
-              iifname "${net.bridge.name}" udp dport 53 counter redirect to :${toString torDnsPort}
+              # DNS redirection: DNAT to localhost
+              # Guest DNS queries (port 53) are redirected to Tor DNSPort (${toString torDnsPort}) on 127.0.0.1
+              iifname "${net.bridge.name}" udp dport 53 counter dnat to 127.0.0.1:${toString torDnsPort}
             '') torNetworks}
           }
 

@@ -87,7 +87,7 @@ let
 
               machine.succeed("${pkgs.iptables}/bin/iptables-save -t nat | grep virbr-test")
               machine.succeed("${pkgs.iptables}/bin/iptables-save -t nat | grep 'virbr-test.*tcp.*--to-ports 9040'")
-              machine.succeed("${pkgs.iptables}/bin/iptables-save -t nat | grep 'virbr-test.*udp.*dport 53.*--to-ports 9053'")
+              machine.succeed("${pkgs.iptables}/bin/iptables-save -t nat | grep 'virbr-test.*udp.*dport 53.*DNAT.*to:127.0.0.1:9053'")
 
               print("✓ All tests passed (iptables backend)!")
             ''

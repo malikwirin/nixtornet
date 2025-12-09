@@ -11,8 +11,9 @@ firewall // network-namespace // rec {
   /**
     Capture and analyze DNS packets on specified interfaces.
 
-    Starts tcpdump on bridge interface to track DNS packets before and after
-    NAT redirect, performs an action, then stops captures and returns packet data.
+    Starts tcpdump on bridge and loopback interfaces to track DNS packets before 
+    DNAT (port 53 on bridge) and after DNAT (port ${dnsPort} on localhost), performs 
+    an action, then stops captures and returns packet data.
 
     Type: captureDnsPackets :: {
     bridgeName :: String,
@@ -47,11 +48,12 @@ firewall // network-namespace // rec {
       machine.succeed(
         "(${tcpdump} -i ${bridgeName} -n udp port 53 -w /tmp/dns-bridge.pcap </dev/null >/dev/null 2>&1 &) && sleep 0.1"
       )
-      # Capture redirected DNS traffic (port ${toString dnsPort}) on bridge
-      # Tor listens on the bridge IP, so traffic arrives here after NAT redirect
+      # Capture redirected DNS traffic (port ${toString dnsPort}) on loopback
+      # After DNAT, packets are redirected to localhost where Tor DNSPort listens
       machine.succeed(
-        "(${tcpdump} -i ${bridgeName} -n udp port ${toString dnsPort} -w /tmp/dns-tor.pcap </dev/null >/dev/null 2>&1 &) && sleep 0.1"
+        "(${tcpdump} -i lo -n udp port ${toString dnsPort} -w /tmp/dns-tor.pcap </dev/null >/dev/null 2>&1 &) && sleep 0.1"
       )
+
       time.sleep(1)
 
       # Execute the action (DNS query)
@@ -296,16 +298,18 @@ firewall // network-namespace // rec {
     Type: evaluateDnsQueryResult :: {
       mockAnswer :: String,
       query :: String
+      dnsPort :: Int
     } -> String
     
     Arguments:
     - mockAnswer: Expected DNS answer for validation
     - query: Domain name that was queried
+    - dnsPort: Tor DNS port (default: 9053)
     
     Returns:
     Python code that evaluates the DNS query result and diagnoses failures.
   */
-  evaluateDnsQueryResult = { mockAnswer, query }:
+  evaluateDnsQueryResult = { mockAnswer, query, dnsPort ? 9053 }:
     ''
       # Evaluate DNS query result
       print("\n--- DNS Query Result ---")
@@ -317,25 +321,31 @@ firewall // network-namespace // rec {
         print("✗ DNS QUERY FAILED")
         print(f"  Exit code: {dns_result[0]}")
         print(f"  Output: {dns_result[1]}")
-        
+
         # Diagnose the failure
         if has_bridge_packets and not has_tor_packets:
-          print("\n⚠️ DIAGNOSIS: NAT redirect not working")
-          print("  - Packets reach bridge ✔️")
-          print("  - Packets do NOT reach Tor DNS ❌")
-          print("  - Likely cause: Firewall blocks DNS before NAT redirect")
+          print("\n⚠️ DIAGNOSIS: DNAT redirect not working")
+          print("  - Packets reach bridge (port 53) ✔️")
+          print("  - Packets do NOT reach localhost Tor DNS (port ${toString dnsPort}) ❌")
+          print("  - Likely causes:")
+          print("    * DNAT rule missing or incorrect")
+          print("    * Firewall blocks redirected traffic to localhost")
+          print("    * Tor DNS not listening on 127.0.0.1:${toString dnsPort}")
           machine.succeed("false")
         elif not has_bridge_packets:
           print("\n⚠️ DIAGNOSIS: Packets not leaving namespace")
+          print("  - No DNS queries (port 53) detected on bridge")
           print("  - Check namespace routing and interface status")
           machine.succeed("false")
         elif has_tor_packets:
           print("\n⚠️ DIAGNOSIS: Tor DNS receives query but response fails")
-          print("  - Check Tor DNS mock configuration")
+          print("  - Packets reach localhost:${toString dnsPort} ✔️")
+          print("  - But DNS query failed (no response or wrong answer)")
+          print("  - Check Tor DNS mock configuration and response handling")
           machine.succeed("false")
         else:
           print("\n⚠️ DIAGNOSIS: Unknown failure")
-          print("  - No packets captured anywhere")
+          print("  - No packets captured on bridge or localhost")
           machine.succeed("false")
     '';
 
@@ -442,7 +452,7 @@ firewall // network-namespace // rec {
       print("\nPackets on bridge (${bridgeName}):")
       print(bridge_packets[1] if bridge_packets[1].strip() else "  No packets")
   
-      print("\nPackets on ${bridgeName}:${toString dnsPort} (Tor DNS after redirect):")
+      print("\nPackets on localhost:${toString dnsPort} (Tor DNS after redirect):")
       print(tor_packets[1] if tor_packets[1].strip() else "  No packets")
 
       ${evaluateDnsQueryResult { inherit mockAnswer query; }}

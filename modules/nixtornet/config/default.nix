@@ -118,10 +118,9 @@ in
           port = 9040;
         };
 
-        DNSPort = mkDefault (
-          [{ addr = "127.0.0.1"; port = 9053; }]
-          ++ map (net: { addr = net.ip.address; port = 9053; }) torNetworks
-        );
+        DNSPort = mkDefault [
+          { addr = "127.0.0.1"; port = 9053; }
+        ];
       };
     };
 
