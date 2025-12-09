@@ -10,6 +10,7 @@ let
   helpers = import ./lib/default.nix { inherit pkgs; };
   shell-scripts = import ./lib/shell-scripts.nix { inherit pkgs; };
   inherit (executables) dnsmasq ip killall ping udhcpc;
+  gatewayIp = "192.168.100.1";
 in
 pkgs.testers.runNixOSTest {
   name = "nixtornet-dns-connectivity-${if useNftables then "nftables" else "iptables"}";
@@ -45,7 +46,7 @@ pkgs.testers.runNixOSTest {
 
         serviceConfig = {
           Type = "forking";
-          ExecStart = shell-scripts.start-mock-tor;
+          ExecStart = shell-scripts.start-mock-tor gatewayIp;
           ExecStop = shell-scripts.stop-mock-tor;
           RemainAfterExit = true;
         };
@@ -71,7 +72,6 @@ pkgs.testers.runNixOSTest {
     let
       bridgeName = "virbr-tornet";
       namespace = "dns-test";
-      gatewayIp = "192.168.100.1";
       vethHost = "veth-host";
       vethGuest = "veth-guest";
     in
